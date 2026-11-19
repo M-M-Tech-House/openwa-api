@@ -13,7 +13,7 @@ interface VercelResponse extends ServerResponse {
   setHeader(name: string, value: string | number | readonly string[]): this;
 }
 
-const SOCKET_SERVICE_URL = (process.env.SOCKET_SERVICE_URL || 'https://openwa-socket-service.onrender.com').replace(/\/+$/, '');
+const SOCKET_SERVICE_URL = (process.env.SOCKET_SERVICE_URL || 'https://api-wa.mmtechhouse.co').replace(/\/+$/, '');
 const FALLBACK_API_URL = (process.env.FALLBACK_API_URL || 'https://api-wa.mmtechhouse.co').replace(/\/+$/, '');
 const ENGINE_TYPE = process.env.ENGINE_TYPE || 'remote-socket';
 
@@ -156,7 +156,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (waWebViewMatch && req.method === 'GET') {
     const sessionId = waWebViewMatch[1];
     const apiKey = (req.query?.apiKey as string) || (req.headers['x-api-key'] as string) || '';
-    const html = generateWaWebViewerHtml(sessionId, apiKey, SOCKET_SERVICE_URL);
+    const requestedSocket = typeof req.query.socketUrl === 'string' && req.query.socketUrl.trim() ? req.query.socketUrl.trim().replace(/\/+$/, '') : SOCKET_SERVICE_URL;
+    const html = generateWaWebViewerHtml(sessionId, apiKey, requestedSocket);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(html);
   }
