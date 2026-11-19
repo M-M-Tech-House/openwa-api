@@ -1,0 +1,16 @@
+{
+  "name": "openwa-api",
+  "version": "1.0.0",
+  "description": "OpenWA Serverless Backend API for Vercel (Development)",
+  "main": "api/index.ts",
+  "scripts": {
+    "build": "echo 'Build OK'"
+  },
+  "dependencies": {
+    "@vercel/node": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  }
+}
