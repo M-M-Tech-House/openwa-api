@@ -199,6 +199,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (pathname === '/auth/validate') {
     return res.status(200).json({
       valid: true,
+      role: 'admin',
+      engineType: ENGINE_TYPE,
       user: { id: 'admin', name: 'Admin Developer', role: 'admin' }
     });
   }
