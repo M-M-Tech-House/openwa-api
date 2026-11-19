@@ -15,6 +15,10 @@ interface VercelResponse extends ServerResponse {
 
 const SOCKET_SERVICE_URL = (process.env.SOCKET_SERVICE_URL || 'https://api-wa.mmtechhouse.co').replace(/\/+$/, '');
 const FALLBACK_API_URL = (process.env.FALLBACK_API_URL || 'https://api-wa.mmtechhouse.co').replace(/\/+$/, '');
+// The real backend mounts every route under /api (e.g. /api/sessions), while this
+// edge handler routes on bare paths (/sessions). Prefix here instead of changing
+// every call site.
+const BACKEND_PREFIX = (process.env.FALLBACK_API_PREFIX ?? '/api').replace(/\/+$/, '');
 const ENGINE_TYPE = process.env.ENGINE_TYPE || 'remote-socket';
 // Server-side credential used when the dev API has to call the real backend
 // (api-wa.mmtechhouse.co) on behalf of the browser. The browser does not hold it.
@@ -74,7 +78,7 @@ function userAuthHeaders(req?: VercelRequest): Record<string, string> {
 
 async function fetchBackend(path: string, method: string = 'GET', body?: any, req?: VercelRequest) {
   try {
-    const response = await fetch(`${FALLBACK_API_URL}${path}`, {
+    const response = await fetch(`${FALLBACK_API_URL}${BACKEND_PREFIX}${path}`, {
       method,
       headers: userAuthHeaders(req),
       body: body ? JSON.stringify(body) : undefined
@@ -104,7 +108,7 @@ async function forwardToSocketService(path: string, method: string, body?: any) 
 
 async function forwardToFallback(path: string, req: VercelRequest, res: VercelResponse) {
   try {
-    const targetUrl = `${FALLBACK_API_URL}${path}`;
+    const targetUrl = `${FALLBACK_API_URL}${BACKEND_PREFIX}${path}`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json'
     };
