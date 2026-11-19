@@ -52,15 +52,31 @@ function setCors(res: VercelResponse) {
 
 function backendAuthHeaders(extra: Record<string, string> = {}): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extra };
-  if (BACKEND_API_KEY) headers['x-api-key'] = BACKEND_API_KEY;
+  // Only fall back to the service key when the caller did not supply a user credential.
+  if (BACKEND_API_KEY && !headers['x-api-key'] && !headers['Authorization']) {
+    headers['x-api-key'] = BACKEND_API_KEY;
+  }
   return headers;
 }
 
-async function fetchBackend(path: string, method: string = 'GET', body?: any) {
+// Build auth headers for a backend call made on behalf of the browser.
+// Priority: the credentials the logged-in user already sent (x-api-key /
+// Authorization) > a server-side service key (OPENWA_API_KEY) > anonymous.
+function userAuthHeaders(req?: VercelRequest): Record<string, string> {
+  const incoming: Record<string, string> = {};
+  if (req?.headers) {
+    if (req.headers['authorization']) incoming['Authorization'] = String(req.headers['authorization']);
+    if (req.headers['x-api-key']) incoming['x-api-key'] = String(req.headers['x-api-key']);
+  }
+  if (Object.keys(incoming).length > 0) return backendAuthHeaders(incoming);
+  return backendAuthHeaders();
+}
+
+async function fetchBackend(path: string, method: string = 'GET', body?: any, req?: VercelRequest) {
   try {
     const response = await fetch(`${FALLBACK_API_URL}${path}`, {
       method,
-      headers: backendAuthHeaders(),
+      headers: userAuthHeaders(req),
       body: body ? JSON.stringify(body) : undefined
     });
     const data = await response.json().catch(() => null);
@@ -192,7 +208,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const waWebStatusMatch = pathname.match(/^\/sessions\/([^/]+)\/wa-web\/status$/);
   if (waWebStatusMatch && req.method === 'GET') {
     const sessionId = waWebStatusMatch[1];
-    const remote = await fetchBackend(`/sessions/${sessionId}/wa-web/status`);
+    const remote = await fetchBackend(`/sessions/${sessionId}/wa-web/status`, 'GET', undefined, req);
     if (remote.ok && remote.data) return res.status(remote.status).json(remote.data);
     return res.status(200).json({
       running: false,
@@ -208,7 +224,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const waWebStartMatch = pathname.match(/^\/sessions\/([^/]+)\/wa-web\/start$/);
   if (waWebStartMatch && req.method === 'POST') {
     const sessionId = waWebStartMatch[1];
-    const remote = await fetchBackend(`/sessions/${sessionId}/wa-web/start`, 'POST', req.body || {});
+    const remote = await fetchBackend(`/sessions/${sessionId}/wa-web/start`, 'POST', req.body || {}, req);
     if (remote.ok && remote.data) return res.status(remote.status).json(remote.data);
     return res.status(502).json({
       running: false,
@@ -306,7 +322,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (pathname === '/sessions' || pathname === '/sessions/') {
     if (req.method === 'GET') {
       // Real backend is the source of truth; devSessions is only a resilient fallback.
-      const remote = await fetchBackend('/sessions');
+      const remote = await fetchBackend('/sessions', 'GET', undefined, req);
       if (remote.ok && Array.isArray(remote.data)) {
         return res.status(200).json(remote.data);
       }
@@ -341,7 +357,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (singleSessionMatch) {
     const sessionId = singleSessionMatch[1];
     if (req.method === 'GET') {
-      const remote = await fetchBackend(`/sessions/${sessionId}`);
+      const remote = await fetchBackend(`/sessions/${sessionId}`, 'GET', undefined, req);
       if (remote.ok && remote.data) return res.status(remote.status).json(remote.data);
       const session = devSessions[sessionId] || {
         id: sessionId,
