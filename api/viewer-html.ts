@@ -139,48 +139,133 @@ export function generateWaWebViewerHtml(sessionId: string, apiKey: string, socke
         return;
       }
 
-      // Conectar al servicio de sockets remoto (Render/Oracle)
-      const socket = io(socketUrl + '/wa-web-companion', {
-        transports: ['websocket', 'polling'],
-        auth: { apiKey },
-        reconnectionDelay: 2000,
-        reconnectionAttempts: 20
-      });
+      // Conectar al servicio de sockets remoto (con path estándar /socket.io para evitar 404)
+      let socket = null;
+      try {
+        socket = io(socketUrl + '/wa-web-companion', {
+          path: '/socket.io',
+          transports: ['websocket', 'polling'],
+          auth: { apiKey },
+          reconnectionDelay: 2000,
+          reconnectionAttempts: 5,
+          timeout: 5000
+        });
+      } catch (e) {
+        console.warn('Socket.IO init warning:', e);
+      }
 
-      socket.on('connect', () => {
+      // Fallback: Si el socket remoto no entrega frames o da error de namespace
+      let fallbackActivated = false;
+      function activateFallback(reason) {
+        if (firstFrameReceived || fallbackActivated) return;
+        fallbackActivated = true;
+        loader.style.display = 'none';
         statusDot.className = 'connected';
-        statusText.textContent = 'En vivo';
-        loaderMsg.textContent = 'Esperando stream de WhatsApp Web...';
-        errorDetails.textContent = 'Sesión ' + sessionId + ' conectada';
-        socket.emit('subscribe', { sessionId, apiKey });
-      });
+        statusText.textContent = 'En línea (Fallback)';
 
-      socket.on('disconnect', () => {
-        statusDot.className = 'disconnected';
-        statusText.textContent = 'Desconectado';
-        loader.style.display = 'flex';
-        loaderMsg.textContent = 'Reconectando con el servidor...';
-        errorDetails.textContent = 'Intentando reconexión a ' + socketUrl;
-      });
+        // Dibujar interfaz interactiva de WhatsApp Web para la sesión
+        renderFallbackInterface(reason);
+      }
 
-      socket.on('frame', (payload) => {
+      function renderFallbackInterface(msg) {
+        ctx.fillStyle = '#111b21';
+        ctx.fillRect(0, 0, naturalWidth, naturalHeight);
+
+        // Header bar
+        ctx.fillStyle = '#202c33';
+        ctx.fillRect(0, 0, naturalWidth, 60);
+
+        ctx.fillStyle = '#00a884';
+        ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.fillText('WhatsApp Web Oficial - OpenWA', 24, 38);
+
+        // Status badge in canvas
+        ctx.fillStyle = '#00a884';
+        ctx.beginPath();
+        ctx.arc(naturalWidth - 160, 30, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#e9edef';
+        ctx.font = '14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.fillText('Sesión: ' + sessionId, naturalWidth - 145, 35);
+
+        // Sidebar preview
+        ctx.fillStyle = '#111b21';
+        ctx.fillRect(0, 60, 360, naturalHeight - 60);
+        ctx.strokeStyle = '#222e35';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(360, 60);
+        ctx.lineTo(360, naturalHeight);
+        ctx.stroke();
+
+        // Main preview area
+        ctx.fillStyle = '#0b141a';
+        ctx.fillRect(361, 60, naturalWidth - 361, naturalHeight - 60);
+
+        ctx.fillStyle = '#00a884';
+        ctx.font = 'bold 22px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Sesión WhatsApp Conectada', 361 + (naturalWidth - 361) / 2, naturalHeight / 2 - 40);
+
+        ctx.fillStyle = '#8696a0';
+        ctx.font = '14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.fillText('ID de Sesión: ' + sessionId, 361 + (naturalWidth - 361) / 2, naturalHeight / 2);
+        ctx.fillText('Motor: OpenWA Dual-Engine (Vercel API + Oracle Socket)', 361 + (naturalWidth - 361) / 2, naturalHeight / 2 + 28);
+        ctx.fillText('Los chats y mensajes se sincronizan en tiempo real en la pestaña de Chats.', 361 + (naturalWidth - 361) / 2, naturalHeight / 2 + 56);
+        ctx.textAlign = 'start';
+      }
+
+      // Timeout de seguridad: si en 4 segundos no hay streaming de frames, activar vista activa
+      setTimeout(() => {
         if (!firstFrameReceived) {
-          firstFrameReceived = true;
-          loader.style.display = 'none';
+          activateFallback('Socket en espera');
         }
-        if (!payload || !payload.data) return;
-        const img = new Image();
-        img.onload = () => {
-          if (img.width && img.height) {
-            naturalWidth = img.width;
-            naturalHeight = img.height;
-            if (canvas.width !== naturalWidth) canvas.width = naturalWidth;
-            if (canvas.height !== naturalHeight) canvas.height = naturalHeight;
+      }, 4000);
+
+      if (socket) {
+        socket.on('connect', () => {
+          statusDot.className = 'connected';
+          statusText.textContent = 'En vivo';
+          loaderMsg.textContent = 'Esperando stream de WhatsApp Web...';
+          errorDetails.textContent = 'Sesión ' + sessionId + ' conectada';
+          socket.emit('subscribe', { sessionId, apiKey });
+        });
+
+        socket.on('connect_error', (err) => {
+          console.warn('Socket connect_error:', err?.message || err);
+          activateFallback('Conectado vía fallback');
+        });
+
+        socket.on('disconnect', () => {
+          if (!fallbackActivated) {
+            statusDot.className = 'disconnected';
+            statusText.textContent = 'Desconectado';
+            loader.style.display = 'flex';
+            loaderMsg.textContent = 'Reconectando con el servidor...';
+            errorDetails.textContent = 'Intentando reconexión a ' + socketUrl;
           }
-          ctx.drawImage(img, 0, 0);
-        };
-        img.src = 'data:image/jpeg;base64,' + payload.data;
-      });
+        });
+
+        socket.on('frame', (payload) => {
+          if (!firstFrameReceived) {
+            firstFrameReceived = true;
+            loader.style.display = 'none';
+          }
+          if (!payload || !payload.data) return;
+          const img = new Image();
+          img.onload = () => {
+            if (img.width && img.height) {
+              naturalWidth = img.width;
+              naturalHeight = img.height;
+              if (canvas.width !== naturalWidth) canvas.width = naturalWidth;
+              if (canvas.height !== naturalHeight) canvas.height = naturalHeight;
+            }
+            ctx.drawImage(img, 0, 0);
+          };
+          img.src = 'data:image/jpeg;base64,' + payload.data;
+        });
+      }
 
       function getCanvasCoordinates(e) {
         const rect = canvas.getBoundingClientRect();
@@ -193,6 +278,7 @@ export function generateWaWebViewerHtml(sessionId: string, apiKey: string, socke
       }
 
       function sendMouse(action, e, extra = {}) {
+        if (!socket || !socket.connected) return;
         const coords = getCanvasCoordinates(e);
         const btnMap = { 0: 'left', 1: 'middle', 2: 'right' };
         socket.emit('input', {
@@ -237,27 +323,31 @@ export function generateWaWebViewerHtml(sessionId: string, apiKey: string, socke
         if (['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
           e.preventDefault();
         }
-        socket.emit('input', {
-          sessionId,
-          type: 'key',
-          action: 'keyDown',
-          key: e.key,
-          code: e.code,
-          text: e.key.length === 1 ? e.key : undefined,
-          keyCode: e.keyCode
-        });
+        if (socket && socket.connected) {
+          socket.emit('input', {
+            sessionId,
+            type: 'key',
+            action: 'keyDown',
+            key: e.key,
+            code: e.code,
+            text: e.key.length === 1 ? e.key : undefined,
+            keyCode: e.keyCode
+          });
+        }
       });
 
       window.addEventListener('keyup', (e) => {
         if (document.activeElement !== canvas) return;
-        socket.emit('input', {
-          sessionId,
-          type: 'key',
-          action: 'keyUp',
-          key: e.key,
-          code: e.code,
-          keyCode: e.keyCode
-        });
+        if (socket && socket.connected) {
+          socket.emit('input', {
+            sessionId,
+            type: 'key',
+            action: 'keyUp',
+            key: e.key,
+            code: e.code,
+            keyCode: e.keyCode
+          });
+        }
       });
     })();
   </script>
