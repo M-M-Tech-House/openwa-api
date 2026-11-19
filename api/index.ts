@@ -282,39 +282,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const sessionQrMatch = pathname.match(/^\/sessions\/([^/]+)\/qr$/);
   if (sessionQrMatch && req.method === 'GET') {
     const sessionId = sessionQrMatch[1];
-    const remote = await forwardToSocketService(`/sessions/${sessionId}/qr`, 'GET');
+    const remote = await fetchBackend(`/sessions/${sessionId}/qr`, 'GET', undefined, req);
     if (remote.ok && remote.data) {
       return res.status(remote.status).json(remote.data);
     }
-    return res.status(200).json({
-      status: 'authenticated',
-      qrCode: null,
-      message: 'Session is active on remote socket'
-    });
+    const socketRemote = await forwardToSocketService(`/sessions/${sessionId}/qr`, 'GET');
+    if (socketRemote.ok && socketRemote.data) {
+      return res.status(socketRemote.status).json(socketRemote.data);
+    }
+    return res.status(remote.status || 404).json(remote.data || { error: 'QR not available' });
   }
 
   // 9. Session Start: /sessions/:id/start
   const sessionStartMatch = pathname.match(/^\/sessions\/([^/]+)\/start$/);
   if (sessionStartMatch && req.method === 'POST') {
     const sessionId = sessionStartMatch[1];
-    const remote = await forwardToSocketService(`/sessions/${sessionId}/start`, 'POST', req.body);
-    if (remote.ok) {
-      if (devSessions[sessionId]) devSessions[sessionId].status = 'connected';
+    const remote = await fetchBackend(`/sessions/${sessionId}/start`, 'POST', req.body, req);
+    if (remote.ok && remote.data) {
+      if (devSessions[sessionId]) devSessions[sessionId].status = remote.data.status || 'initializing';
       return res.status(remote.status).json(remote.data);
     }
-    if (!devSessions[sessionId]) {
-      devSessions[sessionId] = { id: sessionId, name: sessionId, status: 'connected', engine: ENGINE_TYPE };
+    const socketRemote = await forwardToSocketService(`/sessions/${sessionId}/start`, 'POST', req.body);
+    if (socketRemote.ok) {
+      if (devSessions[sessionId]) devSessions[sessionId].status = 'connected';
+      return res.status(socketRemote.status).json(socketRemote.data);
     }
-    return res.status(200).json({ status: 'starting', sessionId });
+    return res.status(remote.status || 500).json(remote.data || { error: 'Failed to start session' });
   }
 
   // 10. Session Stop: /sessions/:id/stop
   const sessionStopMatch = pathname.match(/^\/sessions\/([^/]+)\/stop$/);
   if (sessionStopMatch && req.method === 'POST') {
     const sessionId = sessionStopMatch[1];
-    const remote = await forwardToSocketService(`/sessions/${sessionId}/stop`, 'POST', req.body);
-    if (devSessions[sessionId]) devSessions[sessionId].status = 'disconnected';
-    if (remote.ok) return res.status(remote.status).json(remote.data);
+    const remote = await fetchBackend(`/sessions/${sessionId}/stop`, 'POST', req.body, req);
+    if (remote.ok && remote.data) return res.status(remote.status).json(remote.data);
+    const socketRemote = await forwardToSocketService(`/sessions/${sessionId}/stop`, 'POST', req.body);
+    if (socketRemote.ok) return res.status(socketRemote.status).json(socketRemote.data);
     return res.status(200).json({ status: 'stopped', sessionId });
   }
 
@@ -322,9 +325,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const sessionLogoutMatch = pathname.match(/^\/sessions\/([^/]+)\/logout$/);
   if (sessionLogoutMatch && req.method === 'POST') {
     const sessionId = sessionLogoutMatch[1];
-    const remote = await forwardToSocketService(`/sessions/${sessionId}/logout`, 'POST', req.body);
-    if (devSessions[sessionId]) devSessions[sessionId].status = 'disconnected';
-    if (remote.ok) return res.status(remote.status).json(remote.data);
+    const remote = await fetchBackend(`/sessions/${sessionId}/logout`, 'POST', req.body, req);
+    if (remote.ok && remote.data) return res.status(remote.status).json(remote.data);
+    const socketRemote = await forwardToSocketService(`/sessions/${sessionId}/logout`, 'POST', req.body);
+    if (socketRemote.ok) return res.status(socketRemote.status).json(socketRemote.data);
     return res.status(200).json({ status: 'logged_out', sessionId });
   }
 
