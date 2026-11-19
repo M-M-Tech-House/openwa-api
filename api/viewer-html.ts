@@ -216,12 +216,12 @@ export function generateWaWebViewerHtml(sessionId: string, apiKey: string, socke
         ctx.textAlign = 'start';
       }
 
-      // Timeout de seguridad: si en 4 segundos no hay streaming de frames, activar vista activa
+      // Timeout de seguridad: si en 30 segundos no hay streaming de frames, activar vista de respaldo
       setTimeout(() => {
         if (!firstFrameReceived) {
           activateFallback('Socket en espera');
         }
-      }, 4000);
+      }, 30000);
 
       if (socket) {
         socket.on('connect', () => {
