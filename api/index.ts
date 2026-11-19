@@ -364,6 +364,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // 15. Fallback transparent forward to FALLBACK_API_URL (/api-wa.mmtechhouse.co)
-  const fullApiPath = req.url?.startsWith('/api') ? req.url : `/api${req.url}`;
+  // Socket.IO routes are mounted at root (/socket.io), not under /api
+  const isSocketIo = req.url?.startsWith('/socket.io');
+  const fullApiPath = isSocketIo
+    ? (req.url || '/')
+    : req.url?.startsWith('/api')
+      ? req.url
+      : `/api${req.url}`;
   return forwardToFallback(fullApiPath, req, res);
 }
