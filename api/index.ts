@@ -95,11 +95,12 @@ async function forwardToSocketService(path: string, method: string, body?: any) 
 }
 
 // `path` is always received already prefixed with BACKEND_PREFIX.
-async function forwardToFallback(path: string, req: VercelRequest, res: VercelResponse) {
+async function forwardToFallback(path: string, req: VercelRequest, res: VercelResponse, rawBody?: string) {
   try {
     const targetUrl = `${FALLBACK_API_URL}${path}`;
+    const incomingContentType = (req.headers['content-type'] as string) || '';
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
+      'Content-Type': incomingContentType || 'application/json'
     };
     if (req.headers['authorization']) headers['Authorization'] = String(req.headers['authorization']);
     if (req.headers['x-api-key']) headers['x-api-key'] = String(req.headers['x-api-key']);
@@ -107,15 +108,29 @@ async function forwardToFallback(path: string, req: VercelRequest, res: VercelRe
       headers['x-api-key'] = BACKEND_API_KEY;
     }
 
+    let bodyToSend: any = undefined;
+    if (['POST', 'PUT', 'PATCH'].includes(req.method || '')) {
+      if (typeof rawBody === 'string' && rawBody.length > 0) {
+        bodyToSend = rawBody;
+      } else if (typeof req.body === 'string') {
+        bodyToSend = req.body;
+      } else if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+        bodyToSend = JSON.stringify(req.body);
+      }
+    }
+
     const opts: RequestInit = {
       method: req.method,
       headers,
-      body: ['POST', 'PUT', 'PATCH'].includes(req.method || '') && req.body ? JSON.stringify(req.body) : undefined
+      body: bodyToSend
     };
 
     const resp = await fetch(targetUrl, opts);
     const contentType = resp.headers.get('content-type') || '';
     res.status(resp.status);
+    if (contentType) {
+      res.setHeader('Content-Type', contentType);
+    }
 
     if (contentType.includes('application/json')) {
       const data = await resp.json().catch(() => ({}));
@@ -137,16 +152,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // Parse body if needed and available as stream
-  if (req.body === undefined && ['POST', 'PUT', 'PATCH'].includes(req.method || '')) {
-    try {
-      const buffers = [];
-      for await (const chunk of req) {
-        buffers.push(chunk);
+  let rawBodyText = '';
+  if (['POST', 'PUT', 'PATCH'].includes(req.method || '')) {
+    if (req.body === undefined) {
+      try {
+        const buffers = [];
+        for await (const chunk of req) {
+          buffers.push(chunk);
+        }
+        rawBodyText = Buffer.concat(buffers).toString('utf-8');
+        try {
+          req.body = JSON.parse(rawBodyText);
+        } catch {
+          req.body = rawBodyText;
+        }
+      } catch {
+        req.body = {};
       }
-      const raw = Buffer.concat(buffers).toString('utf-8');
-      if (raw) req.body = JSON.parse(raw);
-    } catch {
-      req.body = {};
+    } else if (typeof req.body === 'string') {
+      rawBodyText = req.body;
     }
   }
 
@@ -371,5 +395,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     : req.url?.startsWith('/api')
       ? req.url
       : `/api${req.url}`;
-  return forwardToFallback(fullApiPath, req, res);
+  return forwardToFallback(fullApiPath, req, res, rawBodyText);
 }
