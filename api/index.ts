@@ -16,6 +16,9 @@ interface VercelResponse extends ServerResponse {
 const SOCKET_SERVICE_URL = (process.env.SOCKET_SERVICE_URL || 'https://api-wa.mmtechhouse.co').replace(/\/+$/, '');
 const FALLBACK_API_URL = (process.env.FALLBACK_API_URL || 'https://api-wa.mmtechhouse.co').replace(/\/+$/, '');
 const ENGINE_TYPE = process.env.ENGINE_TYPE || 'remote-socket';
+// Server-side credential used when the dev API has to call the real backend
+// (api-wa.mmtechhouse.co) on behalf of the browser. The browser does not hold it.
+const BACKEND_API_KEY = process.env.OPENWA_API_KEY || '';
 
 // In-memory sessions store for development fallback
 const devSessions: Record<string, any> = {
@@ -47,12 +50,32 @@ function setCors(res: VercelResponse) {
   );
 }
 
+function backendAuthHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extra };
+  if (BACKEND_API_KEY) headers['x-api-key'] = BACKEND_API_KEY;
+  return headers;
+}
+
+async function fetchBackend(path: string, method: string = 'GET', body?: any) {
+  try {
+    const response = await fetch(`${FALLBACK_API_URL}${path}`, {
+      method,
+      headers: backendAuthHeaders(),
+      body: body ? JSON.stringify(body) : undefined
+    });
+    const data = await response.json().catch(() => null);
+    return { ok: response.ok, status: response.status, data };
+  } catch (err: any) {
+    return { ok: false, status: 502, data: null, error: err.message };
+  }
+}
+
 async function forwardToSocketService(path: string, method: string, body?: any) {
   try {
     const targetUrl = `${SOCKET_SERVICE_URL}${path}`;
     const opts: RequestInit = {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: backendAuthHeaders(),
       body: body ? JSON.stringify(body) : undefined
     };
     const response = await fetch(targetUrl, opts);
@@ -71,6 +94,9 @@ async function forwardToFallback(path: string, req: VercelRequest, res: VercelRe
     };
     if (req.headers['authorization']) headers['Authorization'] = String(req.headers['authorization']);
     if (req.headers['x-api-key']) headers['x-api-key'] = String(req.headers['x-api-key']);
+    if (!headers['x-api-key'] && !headers['Authorization'] && BACKEND_API_KEY) {
+      headers['x-api-key'] = BACKEND_API_KEY;
+    }
 
     const opts: RequestInit = {
       method: req.method,
@@ -166,19 +192,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const waWebStatusMatch = pathname.match(/^\/sessions\/([^/]+)\/wa-web\/status$/);
   if (waWebStatusMatch && req.method === 'GET') {
     const sessionId = waWebStatusMatch[1];
+    const remote = await fetchBackend(`/sessions/${sessionId}/wa-web/status`);
+    if (remote.ok && remote.data) return res.status(remote.status).json(remote.data);
     return res.status(200).json({
-      running: true,
-      authenticated: true,
+      running: false,
+      authenticated: false,
       qrReady: false,
       hasQr: false,
-      sessionId
+      sessionId,
+      source: 'dev-fallback'
     });
   }
 
   // 5. WhatsApp Web Companion start/stop
   const waWebStartMatch = pathname.match(/^\/sessions\/([^/]+)\/wa-web\/start$/);
   if (waWebStartMatch && req.method === 'POST') {
-    return res.status(200).json({ running: true, message: 'WhatsApp Web Companion started' });
+    const sessionId = waWebStartMatch[1];
+    const remote = await fetchBackend(`/sessions/${sessionId}/wa-web/start`, 'POST', req.body || {});
+    if (remote.ok && remote.data) return res.status(remote.status).json(remote.data);
+    return res.status(502).json({
+      running: false,
+      message: 'Backend unavailable: cannot start WhatsApp Web companion',
+      sessionId
+    });
   }
 
   const waWebStopMatch = pathname.match(/^\/sessions\/([^/]+)\/wa-web\/stop$/);
@@ -269,8 +305,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // 13. Sessions Collection: GET/POST /sessions
   if (pathname === '/sessions' || pathname === '/sessions/') {
     if (req.method === 'GET') {
-      const list = Object.values(devSessions);
-      return res.status(200).json(list);
+      // Real backend is the source of truth; devSessions is only a resilient fallback.
+      const remote = await fetchBackend('/sessions');
+      if (remote.ok && Array.isArray(remote.data)) {
+        return res.status(200).json(remote.data);
+      }
+      // Backend unreachable/unauthorized: merge mock sessions into whatever it returned.
+      const remoteList = Array.isArray(remote.data) ? remote.data : [];
+      const seen = new Set(remoteList.map((s: any) => s?.id));
+      const merged = [...remoteList];
+      for (const session of Object.values(devSessions)) {
+        if (!seen.has((session as any).id)) merged.push(session);
+      }
+      res.setHeader('x-openwa-source', 'dev-fallback');
+      return res.status(200).json(merged);
     }
     if (req.method === 'POST') {
       const newSession = req.body || {};
@@ -293,10 +341,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (singleSessionMatch) {
     const sessionId = singleSessionMatch[1];
     if (req.method === 'GET') {
+      const remote = await fetchBackend(`/sessions/${sessionId}`);
+      if (remote.ok && remote.data) return res.status(remote.status).json(remote.data);
       const session = devSessions[sessionId] || {
         id: sessionId,
         name: sessionId,
-        status: 'connected',
+        status: 'disconnected',
         engine: ENGINE_TYPE
       };
       return res.status(200).json(session);
