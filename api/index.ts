@@ -24,25 +24,13 @@ const ENGINE_TYPE = process.env.ENGINE_TYPE || 'remote-socket';
 // (api-wa.mmtechhouse.co) on behalf of the browser. The browser does not hold it.
 const BACKEND_API_KEY = process.env.OPENWA_API_KEY || '';
 
-// In-memory sessions store for development fallback
-const devSessions: Record<string, any> = {
-  'mt3-group': {
-    id: 'mt3-group',
-    name: 'MT3 Group',
-    status: 'connected',
-    phone: '573246329165',
-    engine: ENGINE_TYPE,
-    createdAt: new Date().toISOString()
-  },
-  'consultorio-empresarial': {
-    id: 'consultorio-empresarial',
-    name: 'Consultorio Empresarial',
-    status: 'connected',
-    phone: '573000837227',
-    engine: ENGINE_TYPE,
-    createdAt: new Date().toISOString()
-  }
-};
+// In-memory sessions store for development fallback.
+//
+// This lives in a serverless function, so it does NOT persist across cold starts and
+// each instance has its own copy. It is therefore only a last-resort safety net: the
+// real backend (api-wa.mmtechhouse.co) stays the single source of truth so that the
+// sessions actually paired to WhatsApp are never duplicated or shadowed by mocks.
+const devSessions: Record<string, any> = {};
 
 function setCors(res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -106,9 +94,10 @@ async function forwardToSocketService(path: string, method: string, body?: any) 
   }
 }
 
+// `path` is always received already prefixed with BACKEND_PREFIX.
 async function forwardToFallback(path: string, req: VercelRequest, res: VercelResponse) {
   try {
-    const targetUrl = `${FALLBACK_API_URL}${BACKEND_PREFIX}${path}`;
+    const targetUrl = `${FALLBACK_API_URL}${path}`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json'
     };
@@ -325,20 +314,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // 13. Sessions Collection: GET/POST /sessions
   if (pathname === '/sessions' || pathname === '/sessions/') {
     if (req.method === 'GET') {
-      // Real backend is the source of truth; devSessions is only a resilient fallback.
+      // Real backend is the single source of truth for the session list.
+      // Only if the backend answers with a success but no list at all do we fall back
+      // to whatever this instance created in memory.
       const remote = await fetchBackend('/sessions', 'GET', undefined, req);
       if (remote.ok && Array.isArray(remote.data)) {
+        res.setHeader('x-openwa-source', 'backend');
         return res.status(200).json(remote.data);
       }
-      // Backend unreachable/unauthorized: merge mock sessions into whatever it returned.
-      const remoteList = Array.isArray(remote.data) ? remote.data : [];
-      const seen = new Set(remoteList.map((s: any) => s?.id));
-      const merged = [...remoteList];
-      for (const session of Object.values(devSessions)) {
-        if (!seen.has((session as any).id)) merged.push(session);
-      }
       res.setHeader('x-openwa-source', 'dev-fallback');
-      return res.status(200).json(merged);
+      return res.status(200).json(Object.values(devSessions));
     }
     if (req.method === 'POST') {
       const newSession = req.body || {};
