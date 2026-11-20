@@ -121,8 +121,8 @@ export function generateWaWebViewerHtml(sessionId: string, apiKey: string, socke
       const errorDetails = document.getElementById('error-details');
       const statusDot = document.getElementById('status-dot');
       const statusText = document.getElementById('status-text');
-      let naturalWidth = 1280;
-      let naturalHeight = 800;
+      let naturalWidth = 1024;
+      let naturalHeight = 640;
       canvas.width = naturalWidth;
       canvas.height = naturalHeight;
       let firstFrameReceived = false;
